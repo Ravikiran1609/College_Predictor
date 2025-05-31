@@ -1,136 +1,179 @@
-# college_predictor_backend/main.py
-
-from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel
-import pandas as pd
 import os
+import glob
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+import pandas as pd
+from pydantic import BaseModel
+from typing import Optional, List
 
-app = FastAPI(title="CET College Predictor (CSV‐only backend)")
+# ------------------------------------------------------------------------------
+# 1) Load all CSVs at startup
+# ------------------------------------------------------------------------------
+DATA_DIR = os.path.join(os.path.dirname(__file__), "cet_cutoffs")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURATION: 
-#   Ensure that cet_cutoffs_r1_prov.csv is present here (same folder as main.py)
-# ─────────────────────────────────────────────────────────────────────────────
-CSV_PATH = os.path.join(os.path.dirname(__file__), "cet_cutoffs_r1_prov.csv")
-if not os.path.exists(CSV_PATH):
-    raise FileNotFoundError(f"Failed to find CSV at {CSV_PATH}")
+# We expect: each CSV has columns:
+#    college_code, college_name, branch_code, category, cutoff_rank
+#
+# We'll add a "course" column to each row, based on the filename prefix.
 
-# Load the CSV into a DataFrame at startup
-df = pd.read_csv(
-    CSV_PATH,
-    dtype={
-        "college_code": str,
-        "college_name": str,
-        "branch_code": str,
-        "category": str,
-        "cutoff_rank": int
+all_dfs = []
+for csv_path in glob.glob(os.path.join(DATA_DIR, "*.csv")):
+    # e.g. "ENGG_CUTOFF_2024_r1_gen_prov.csv"
+    fname = os.path.basename(csv_path)
+    # Extract a friendly course name from the file name.
+    # We'll take everything up to "_CUTOFF", e.g. "ENGG" -> "Engineering"
+    # but you can adjust the logic to be more descriptive if you like.
+    course_key = fname.split("_CUTOFF")[0]  # e.g. "ENGG"
+    # Optionally map short keys to full names:
+    course_map = {
+        "ENGG": "Engineering",
+        "PHARMA": "Pharmacy",
+        "BSCNURS": "BSc Nursing",
+        "agri": "Agriculture & FARM",
+        # ... add more as needed
     }
+    course_name = course_map.get(course_key, course_key)
+
+    df = pd.read_csv(csv_path, dtype={"category": str, "branch_code": str})
+    df["course"] = course_name
+
+    # Standardize column names (in case some CSVs differ):
+    df = df.rename(
+        columns={
+            "college_code": "college_code",
+            "college_name": "college_name",
+            "branch_code": "branch_code",
+            "category": "category",
+            "cutoff_rank": "cutoff_rank",
+        }
+    )
+    # Ensure numeric cutoff_rank
+    df["cutoff_rank"] = pd.to_numeric(df["cutoff_rank"], errors="coerce")
+    all_dfs.append(df)
+
+if not all_dfs:
+    raise RuntimeError("No CSV files found in cet_cutoffs/")
+
+master_df = pd.concat(all_dfs, ignore_index=True)
+
+# ------------------------------------------------------------------------------
+# 2) Build FastAPI app with CORS
+# ------------------------------------------------------------------------------
+app = FastAPI(
+    title="CET College Predictor",
+    description="Given a CET rank, category, (optional) branch, and selected course, predict eligible colleges.",
+    version="1.0",
 )
 
-# Pre‐compute unique categories and branch codes
-CATEGORIES = sorted(df["category"].unique().tolist())
-BRANCH_CODES = sorted(df["branch_code"].unique().tolist())
+# Allow CORS from frontend (adjust origin if needed)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-
-class SingleBranchResult(BaseModel):
-    code: str
+# ------------------------------------------------------------------------------
+# 3) Pydantic model for a single result row
+# ------------------------------------------------------------------------------
+class CollegeResult(BaseModel):
+    college_code: str
     college_name: str
-    branch: str
+    branch_code: str
+    category: str
     cutoff_rank: int
+    course: str
 
+# ------------------------------------------------------------------------------
+# 4) Endpoints
+# ------------------------------------------------------------------------------
 
-class MultiBranchItem(BaseModel):
-    branch: str
-    cutoff_rank: int
-
-
-class MultiBranchResult(BaseModel):
-    code: str
-    college_name: str
-    branches: list[MultiBranchItem]
-
-
-@app.get("/categories", response_model=list[str])
-async def get_categories():
+@app.get("/courses", response_model=List[str])
+def get_courses():
     """
-    Return a JSON array of all unique category codes.
+    Return list of unique courses loaded from CSV filenames.
     """
-    return CATEGORIES
+    courses = master_df["course"].sort_values().unique().tolist()
+    return courses
 
 
-@app.get("/branches", response_model=list[str])
-async def get_branches():
+@app.get("/categories", response_model=List[str])
+def get_categories(course: str = Query(..., description="Course to filter by")):
     """
-    Return a JSON array of all unique branch codes.
+    Return list of unique categories available for the given course.
     """
-    return BRANCH_CODES
+    df_course = master_df[master_df["course"] == course]
+    if df_course.empty:
+        raise HTTPException(status_code=404, detail=f"Course '{course}' not found")
+    cats = df_course["category"].dropna().sort_values().unique().tolist()
+    return cats
 
 
-@app.get("/predict", response_model=list[dict])
-async def predict(
-    rank: int = Query(..., gt=0, description="Your CET rank (positive integer)"),
-    category: str = Query(..., description="Category code, e.g. 'GM' or '1G'"),
-    branch: str = Query("", description="Optional branch code (e.g. 'AI'). If omitted, return all eligible branches per college.")
+@app.get("/branches", response_model=List[str])
+def get_branches(
+    course: str = Query(..., description="Course to filter by"),
 ):
     """
-    If 'branch' is provided: list colleges with that single branch whose cutoff_rank >= rank,
-    sorted by cutoff_rank ascending.
-    If 'branch' is blank: for each college, list all branches whose cutoff_rank >= rank,
-    sorted by cutoff_rank ascending within each college.
+    Return list of unique branches available for the given course.
     """
-    # 1) Validate category
-    if category not in CATEGORIES:
+    df_course = master_df[master_df["course"] == course]
+    if df_course.empty:
+        raise HTTPException(status_code=404, detail=f"Course '{course}' not found")
+    branches = df_course["branch_code"].dropna().sort_values().unique().tolist()
+    return branches
+
+
+@app.get("/predict", response_model=List[CollegeResult])
+def predict_colleges(
+    course: str = Query(..., description="Course to filter by"),
+    rank: int = Query(..., ge=1, description="Your CET rank"),
+    category: str = Query(..., description="Your category (e.g. 'GM', 'SC')"),
+    branch: Optional[str] = Query(None, description="Optional branch code filter"),
+):
+    """
+    Return list of colleges for which: 
+      - course matches
+      - category matches
+      - (optional) branch matches
+      - cutoff_rank >= given rank
+    Sorted ascending by cutoff_rank.
+    """
+    df_course = master_df[master_df["course"] == course]
+    if df_course.empty:
+        raise HTTPException(status_code=404, detail=f"Course '{course}' not found")
+
+    # Filter by category
+    df_filtered = df_course[df_course["category"] == category]
+    if df_filtered.empty:
         raise HTTPException(
-            status_code=400,
-            detail=f"Unknown category '{category}'. Valid categories: {CATEGORIES}"
+            status_code=404,
+            detail=f"No data for category '{category}' in course '{course}'",
         )
 
-    # 2) Filter DataFrame by category
-    df_cat = df[df["category"] == category]
-
+    # Optionally filter by branch
     if branch:
-        # ────────── Single‐branch mode ──────────
-        if branch not in df_cat["branch_code"].unique():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown branch '{branch}' for category '{category}'"
-            )
+        df_filtered = df_filtered[df_filtered["branch_code"] == branch]
+        if df_filtered.empty:
+            # It's valid to return an empty list if no colleges match that branch AND category
+            return []
 
-        # Filter and then sort by cutoff_rank ascending
-        df_sb = df_cat[
-            (df_cat["branch_code"] == branch) &
-            (df_cat["cutoff_rank"] >= rank)
-        ]
-        df_sb = df_sb.sort_values(by="cutoff_rank", ascending=True)
+    # Finally, filter by cutoff rank <= user's rank
+    df_eligible = df_filtered[df_filtered["cutoff_rank"] >= rank]
 
-        out = []
-        for _, row in df_sb.iterrows():
-            out.append({
-                "code": row["college_code"],
-                "college_name": row["college_name"],
-                "branch": row["branch_code"],
-                "cutoff_rank": int(row["cutoff_rank"])
-            })
-        return out
+    # Sort by cutoff_rank ascending (lowest eligible cutoffs first)
+    df_eligible = df_eligible.sort_values("cutoff_rank", ascending=True)
 
-    else:
-        # ────────── Multi‐branch mode ──────────
-        df_mb = df_cat[df_cat["cutoff_rank"] >= rank]
-        df_mb = df_mb.sort_values(by="cutoff_rank", ascending=True)
-
-        grouped = df_mb.groupby(["college_code", "college_name"])
-        out = []
-        for (code, name), group in grouped:
-            branches_list = []
-            for _, row in group.iterrows():
-                branches_list.append({
-                    "branch": row["branch_code"],
-                    "cutoff_rank": int(row["cutoff_rank"])
-                })
-            out.append({
-                "code": code,
-                "college_name": name,
-                "branches": branches_list
-            })
-        return out
+    # Build results
+    results = [
+        CollegeResult(
+            college_code=row["college_code"],
+            college_name=row["college_name"],
+            branch_code=row["branch_code"],
+            category=row["category"],
+            cutoff_rank=int(row["cutoff_rank"]),
+            course=row["course"],
+        )
+        for _, row in df_eligible.iterrows()
+    ]
+    return results
 

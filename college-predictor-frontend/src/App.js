@@ -1,297 +1,308 @@
-// college-predictor-frontend/src/App.js
+import React, { useEffect, useState, useRef } from "react";
+import "./App.css";
 
-import React, { useState, useEffect, useRef } from "react";
-import html2canvas from "html2canvas";
-import jsPDF from "jspdf";
-import "jspdf-autotable";
-import { BRANCH_MAP } from "./branchMap";
+// We will dynamically import jsPDF and html2canvas via a <script> tag in index.html
+// so we can just use window.jspdf.jsPDF and window.html2canvas.
 
 function App() {
-  const [rank, setRank] = useState("");
-  const [category, setCategory] = useState("");
-  const [branch, setBranch] = useState("");
+  const [courses, setCourses] = useState([]);
+  const [selectedCourse, setSelectedCourse] = useState("");
   const [categories, setCategories] = useState([]);
   const [branches, setBranches] = useState([]);
+  const [rank, setRank] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("");
+  const [selectedBranch, setSelectedBranch] = useState("");
   const [results, setResults] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const tableRef = useRef(null);
 
+  const tableRef = useRef();
+
+  // Base URL of backend (adjust if needed; here we assume same host on port 8000)
+  const BASE_URL = "http://localhost:8000";
+
+  // 1) On mount, fetch courses
   useEffect(() => {
-    // Fetch category list
-    fetch("/categories")
+    fetch(`${BASE_URL}/courses`)
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load courses");
+        return res.json();
+      })
+      .then((data) => {
+        setCourses(data);
+        if (data.length > 0) {
+          setSelectedCourse(data[0]);
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+      });
+  }, []);
+
+  // 2) When selectedCourse changes, fetch categories + branches for that course
+  useEffect(() => {
+    if (!selectedCourse) return;
+
+    // Fetch categories
+    fetch(`${BASE_URL}/categories?course=${encodeURIComponent(selectedCourse)}`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load categories");
         return res.json();
       })
       .then((data) => {
         setCategories(data);
-        if (data.length > 0) setCategory(data[0]);
+        if (data.length > 0) {
+          setSelectedCategory(data[0]);
+        }
       })
       .catch((err) => {
         console.error(err);
-        setError("Unable to load category list");
+        setCategories([]);
+        setSelectedCategory("");
       });
 
-    // Fetch branch list
-    fetch("/branches")
+    // Fetch branches
+    fetch(`${BASE_URL}/branches?course=${encodeURIComponent(selectedCourse)}`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load branches");
         return res.json();
       })
       .then((data) => {
         setBranches(data);
-        setBranch("");
+        // We will keep "selectedBranch" optional; initialize it to empty or first value
+        setSelectedBranch("");
       })
       .catch((err) => {
         console.error(err);
-        setError("Unable to load branch list");
+        setBranches([]);
+        setSelectedBranch("");
       });
-  }, []);
+  }, [selectedCourse]);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError("");
-    setResults([]);
-    setLoading(true);
-
-    const numericRank = parseInt(rank, 10);
-    if (isNaN(numericRank) || numericRank <= 0) {
-      setError("Please enter a valid positive integer rank.");
-      setLoading(false);
+  // 3) “Find Colleges” button handler
+  const onFindColleges = () => {
+    if (!selectedCourse || !selectedCategory || !rank) {
+      alert("Please select course, category, and enter your rank.");
       return;
     }
-    if (!category) {
-      setError("Please select a category.");
-      setLoading(false);
-      return;
+    const queryParams = new URLSearchParams({
+      course: selectedCourse,
+      rank,
+      category: selectedCategory,
+    });
+    if (selectedBranch) {
+      queryParams.set("branch", selectedBranch);
     }
-
-    let url = `/predict?rank=${numericRank}&category=${encodeURIComponent(category)}`;
-    if (branch) {
-      url += `&branch=${encodeURIComponent(branch)}`;
-    }
-
-    try {
-      const resp = await fetch(url);
-      if (!resp.ok) {
-        const errJson = await resp.json();
-        throw new Error(errJson.detail || resp.statusText);
-      }
-      const data = await resp.json();
-      setResults(data);
-    } catch (err) {
-      console.error("Fetch error:", err);
-      setError(`Error fetching results: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+    fetch(`${BASE_URL}/predict?${queryParams.toString()}`)
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to load results");
+        return res.json();
+      })
+      .then((data) => {
+        setResults(data);
+      })
+      .catch((err) => {
+        console.error(err);
+        setResults([]);
+      });
   };
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // Download the results DIV as a PDF
-  // ──────────────────────────────────────────────────────────────────────────
-  const handleDownloadPdf = async () => {
-    if (!tableRef.current) return;
-    // 1) Render the table area to a high‐res canvas
-    const canvas = await html2canvas(tableRef.current, { scale: 2 });
+  // 4) “Download as PDF” handler
+  const onDownloadPDF = async () => {
+    if (!window.jspdf || !window.jspdf.jsPDF || !window.html2canvas) {
+      alert("PDF libraries not loaded.");
+      return;
+    }
+    const { jsPDF } = window.jspdf;
+    const element = tableRef.current;
+    const canvas = await window.html2canvas(element, {
+      scale: 2,
+      useCORS: true,
+    });
     const imgData = canvas.toDataURL("image/png");
-
-    // 2) Create a PDF instance
-    const pdf = new jsPDF("p", "pt", "a4");
-    pdf.setFontSize(18);
-    pdf.text("Eligible Colleges", 40, 30);
-
-    // 3) Compute width/height to fit A4
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const imgWidth = pageWidth - 80;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-
-    // 4) Add the image and save
-    pdf.addImage(imgData, "PNG", 40, 50, imgWidth, imgHeight);
-    pdf.save("Eligible_Colleges.pdf");
+    const pdf = new jsPDF({
+      orientation: "landscape",
+      unit: "pt",
+      format: "a4",
+    });
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight =
+      (canvas.height * pdfWidth) / canvas.width;
+    pdf.text(`CET College Predictor Results`, 40, 40);
+    pdf.text(`Course: ${selectedCourse}`, 40, 60);
+    pdf.text(`Category: ${selectedCategory}`, 40, 80);
+    if (selectedBranch) {
+      pdf.text(`Branch: ${selectedBranch}`, 40, 100);
+    }
+    pdf.text(`Rank: ${rank}`, 40, 120);
+    pdf.addImage(
+      imgData,
+      "PNG",
+      20,
+      140,
+      pdfWidth - 40,
+      pdfHeight - 160
+    );
+    pdf.save("cet_college_predictions.pdf");
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col items-center py-10 px-4">
-      <h1 className="text-4xl font-bold mb-8">CET College Predictor</h1>
-
-      {error && (
-        <div className="mb-4 w-full max-w-md bg-red-100 text-red-700 p-3 rounded">
-          {error}
-        </div>
-      )}
-
-      {/* Input Form */}
-      <div className="w-full max-w-md bg-white shadow-md rounded-lg p-6 mb-8">
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Rank */}
-          <div>
-            <label
-              htmlFor="rank-input"
-              className="block text-gray-700 font-medium mb-1"
-            >
-              Your CET Rank
-            </label>
-            <input
-              type="number"
-              id="rank-input"
-              value={rank}
-              onChange={(e) => setRank(e.target.value)}
-              placeholder="e.g. 19024"
-              className="w-full px-4 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-400"
-              required
-              min="1"
-            />
-          </div>
-
-          {/* Category */}
-          <div>
-            <label
-              htmlFor="category-select"
-              className="block text-gray-700 font-medium mb-1"
-            >
-              Category
-            </label>
-            <select
-              id="category-select"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-400"
-              required
-            >
-              <option value="" disabled>
-                Select category…
-              </option>
-              {categories.map((cat) => (
-                <option key={cat} value={cat}>
-                  {cat}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Branch (optional) */}
-          <div>
-            <label
-              htmlFor="branch-select"
-              className="block text-gray-700 font-medium mb-1"
-            >
-              Branch (optional)
-            </label>
-            <select
-              id="branch-select"
-              value={branch}
-              onChange={(e) => setBranch(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-400"
-            >
-              <option value="">-- None (all branches) --</option>
-              {branches.map((code) => (
-                <option key={code} value={code}>
-                  {`${code} ${BRANCH_MAP[code] || ""}`}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-blue-500 text-white font-medium py-2 rounded hover:bg-blue-600 transition disabled:opacity-50"
+    <div style={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
+      <h1>CET College Predictor</h1>
+      <div style={{ marginBottom: "12px" }}>
+        <label>
+          Course:&nbsp;
+          <select
+            value={selectedCourse}
+            onChange={(e) => setSelectedCourse(e.target.value)}
           >
-            {loading ? "Searching..." : "Find Colleges"}
-          </button>
-        </form>
+            {courses.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
-      {results.length > 0 && (
-        <div className="w-full max-w-4xl bg-white shadow-md rounded-lg p-6 mb-8">
-          {/* Download PDF */}
-          <div className="flex justify-end mb-4">
-            <button
-              onClick={handleDownloadPdf}
-              className="bg-green-500 text-white px-6 py-2 rounded hover:bg-green-600 transition"
-            >
-              Download as PDF
-            </button>
-          </div>
+      <div style={{ marginBottom: "12px" }}>
+        <label>
+          Your CET Rank:&nbsp;
+          <input
+            type="number"
+            value={rank}
+            onChange={(e) => setRank(e.target.value)}
+            style={{ width: "120px" }}
+          />
+        </label>
+      </div>
 
-          {/* Table */}
-          <div ref={tableRef}>
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Code
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    College Name
-                  </th>
+      <div style={{ marginBottom: "12px" }}>
+        <label>
+          Category:&nbsp;
+          <select
+            value={selectedCategory}
+            onChange={(e) => setSelectedCategory(e.target.value)}
+          >
+            {categories.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
 
-                  {branch ? (
-                    <>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Branch
-                      </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Cutoff Rank
-                      </th>
-                    </>
-                  ) : (
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Eligible Branches (Code + Name + Cutoff)
-                    </th>
-                  )}
-                </tr>
-              </thead>
+      <div style={{ marginBottom: "12px" }}>
+        <label>
+          Branch (optional):&nbsp;
+          <select
+            value={selectedBranch}
+            onChange={(e) => setSelectedBranch(e.target.value)}
+          >
+            <option value="">-- All Branches --</option>
+            {branches.map((br) => (
+              <option key={br} value={br}>
+                {br}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
 
-              <tbody className="bg-white divide-y divide-gray-200">
-                {results.map((item, idx) => (
-                  <tr
-                    key={idx}
-                    className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}
-                  >
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                      {item.code}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                      {item.college_name}
-                    </td>
+      <button onClick={onFindColleges}>Find Colleges</button>
+      &nbsp;
+      <button onClick={onDownloadPDF}>Download as PDF</button>
 
-                    {branch ? (
-                      <>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                          {`${item.branch} ${BRANCH_MAP[item.branch] || ""}`}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                          {item.cutoff_rank}
-                        </td>
-                      </>
-                    ) : (
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                        <ul className="list-disc pl-5 space-y-1">
-                          {item.branches.map((b, bi) => (
-                            <li key={bi}>
-                              {`${b.branch} ${BRANCH_MAP[b.branch] || ""} (Cutoff: ${b.cutoff_rank})`}
-                            </li>
-                          ))}
-                        </ul>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      <hr />
 
-      {!loading && results.length === 0 && !error && (
-        <p className="mt-8 text-gray-600">
-          Enter your rank, select a category, (optionally pick a branch), then
-          click “Find Colleges” to see results.
-        </p>
-      )}
+      <div ref={tableRef}>
+        <table
+          style={{
+            width: "100%",
+            borderCollapse: "collapse",
+            marginTop: "20px",
+          }}
+        >
+          <thead>
+            <tr>
+              <th style={{ border: "1px solid #333", padding: "8px" }}>
+                Code
+              </th>
+              <th style={{ border: "1px solid #333", padding: "8px" }}>
+                College Name
+              </th>
+              <th style={{ border: "1px solid #333", padding: "8px" }}>
+                Branch
+              </th>
+              <th style={{ border: "1px solid #333", padding: "8px" }}>
+                Category
+              </th>
+              <th style={{ border: "1px solid #333", padding: "8px" }}>
+                Cutoff Rank
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {results.map((row, idx) => (
+              <tr key={idx}>
+                <td
+                  style={{
+                    border: "1px solid #ccc",
+                    padding: "6px",
+                  }}
+                >
+                  {row.college_code}
+                </td>
+                <td
+                  style={{
+                    border: "1px solid #ccc",
+                    padding: "6px",
+                  }}
+                >
+                  {row.college_name}
+                </td>
+                <td
+                  style={{
+                    border: "1px solid #ccc",
+                    padding: "6px",
+                  }}
+                >
+                  {row.branch_code}
+                </td>
+                <td
+                  style={{
+                    border: "1px solid #ccc",
+                    padding: "6px",
+                  }}
+                >
+                  {row.category}
+                </td>
+                <td
+                  style={{
+                    border: "1px solid #ccc",
+                    padding: "6px",
+                  }}
+                >
+                  {row.cutoff_rank}
+                </td>
+              </tr>
+            ))}
+            {results.length === 0 && (
+              <tr>
+                <td
+                  colSpan={5}
+                  style={{
+                    border: "1px solid #ccc",
+                    padding: "6px",
+                    textAlign: "center",
+                  }}
+                >
+                  No eligible colleges found.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
