@@ -1,18 +1,24 @@
-# docker-compose.yml
-
 version: "3.8"
 
 services:
-  cet-backend:
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # 1) BACKEND SERVICE: FastAPI + Uvicorn (Pandas‐only, no SQLite)
+  # ────────────────────────────────────────────────────────────────────────────
+  backend:
     build:
       context: ./college_predictor_backend
       dockerfile: Dockerfile
     container_name: cet-backend
-    ports:
-      - "8000:8000"
+    # We do NOT need to publish port 8000 to the host, because Nginx will talk to it internally.
+    # But if you want to test direct, you could add:
+    # ports: ["8000:8000"]
     restart: unless-stopped
 
-  cet-frontend:
+  # ────────────────────────────────────────────────────────────────────────────
+  # 2) FRONTEND SERVICE: React build + Nginx (with proxy_pass rules)
+  # ────────────────────────────────────────────────────────────────────────────
+  frontend:
     build:
       context: ./college-predictor-frontend
       dockerfile: Dockerfile
@@ -20,6 +26,6 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - cet-backend
+      - backend
     restart: unless-stopped
 

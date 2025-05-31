@@ -1,16 +1,12 @@
 // college-predictor-frontend/src/branchMap.js
-
-// Maps every branch‐code (exactly as in your CSV/PDF) → its human‐readable full name.
 export const BRANCH_MAP = {
   AI: "Artificial Intelligence",
   AR: "Architecture",
   AE: "Aeronaut. Engg",
   AM: "B Tech in AM",
-  BG: "B Tech in AD",
   BB: "B Tech in EC",
   BW: "B Tech in CS",
   BJ: "B Tech in EE",
-  BO: "B Tech in BT",
   CB: "Comp. Sc. and Bus Sys.",
   CF: "CS (Artificial Intel.)",
   CL: "B Tech in EO",
@@ -21,16 +17,16 @@ export const BRANCH_MAP = {
   DC: "Data Sciences",
   DF: "B Tech in RA",
   DS: "Comp. Sc. Engg – Data Sc.",
-  EA: "Agriculture Engineering",
+  EA: "Agriculture Engg",
   EB: "EAT (Electronics & Telecom.)",
   EC: "Electronics",
   EI: "Elec. Inst. Engg",
   EL: "Electronics, Instr. Tech.",
-  EN: "Environmental Engineering",
+  EN: "Environmental Engg",
   ES: "Electronics & Computer",
   ET: "Elec. Telecommn. Engg.",
   EV: "EC Engg (VLSI Design)",
-  IE: "Info.Science",
+  IE: "Info. Science",
   IM: "Ind. Engg. Mgmt.",
   IP: "Ind. Prodn.",
   LD: "B Tech in DS",
@@ -41,7 +37,7 @@ export const BRANCH_MAP = {
   LJ: "B Tech in BS",
   LK: "B Tech in IOT",
   ME: "Mechanical",
-  MI: "Mining Engineering",
+  MI: "Mining Engg",
   MD: "Med. Elect.",
   OT: "Industrial IOT",
   PT: "Polymer Tech.",
@@ -52,5 +48,6 @@ export const BRANCH_MAP = {
   TX: "Textiles",
   ZN: "B Tech in Pharm. Engg.",
   ZO: "B Tech in CS & Busi. Sys."
+  // …add any other codes you see in the CSV
 };
 

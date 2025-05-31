@@ -9,14 +9,13 @@ app = FastAPI(title="CET College Predictor (CSV‐only backend)")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIGURATION:  
-#   Ensure that cet_cutoffs_r1_prov.csv lives in the same folder as this file.
+#   Ensure that cet_cutoffs_r1_prov.csv is present in this folder.
 # ─────────────────────────────────────────────────────────────────────────────
 CSV_PATH = os.path.join(os.path.dirname(__file__), "cet_cutoffs_r1_prov.csv")
 if not os.path.exists(CSV_PATH):
     raise FileNotFoundError(f"Failed to find CSV at {CSV_PATH}")
 
-# Load the entire CSV into a DataFrame at startup.
-# Expected columns: college_code, college_name, branch_code, category, cutoff_rank
+# Load CSV into a DataFrame at startup.
 df = pd.read_csv(
     CSV_PATH,
     dtype={
@@ -28,20 +27,11 @@ df = pd.read_csv(
     }
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PRE‐COMPUTE UNIQUE CATEGORIES and BRANCH CODES  
-# ─────────────────────────────────────────────────────────────────────────────
-
-# 1) Categories: sorted unique values from the "category" column
+# Pre‐compute unique categories and branch codes
 CATEGORIES = sorted(df["category"].unique().tolist())
-
-# 2) Branches: sorted unique codes from the "branch_code" column
 BRANCH_CODES = sorted(df["branch_code"].unique().tolist())
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SCHEMAS (Pydantic models) for /predict responses
-# ─────────────────────────────────────────────────────────────────────────────
-
+# Pydantic models for responses
 class SingleBranchResult(BaseModel):
     code: str
     college_name: str
@@ -61,34 +51,28 @@ class MultiBranchResult(BaseModel):
 @app.get("/categories", response_model=list[str])
 async def get_categories():
     """
-    Return a JSON array of all unique categories, e.g.
-    ["1G","1K","1R","2AG","2AK","2AR","2BG","2BK","2BR","3AG","3AK","3AR","3BG","3BK","3BR","GM","GMK","GMR","SCG","SCK","SCR","STG","STK","STR"].
+    Return a JSON array of all unique category codes.
     """
     return CATEGORIES
-
 
 @app.get("/branches", response_model=list[str])
 async def get_branches():
     """
-    Return a JSON array of all unique branch codes, e.g.
-    ["AI","AR","AE","AM","BB","BW","BJ", …].
-    (The frontend will map each code to its full name using its own BRANCH_MAP.)
+    Return a JSON array of all unique branch codes.
+    (The frontend will map each code to its full name via its own branchMap.js.)
     """
     return BRANCH_CODES
-
 
 @app.get("/predict", response_model=list[dict])
 async def predict(
     rank: int = Query(..., gt=0, description="Your CET rank (positive integer)"),
     category: str = Query(..., description="Category code, e.g. 'GM' or '1G'"),
-    branch: str = Query("", description="Optional branch code (just 'AI','CS', etc.). If omitted, returns all eligible branches per college.")
+    branch: str = Query("", description="Optional branch code (e.g. 'AI'). If omitted, return all eligible branches per college.")
 ):
     """
-    If 'branch' is provided, return a list of colleges along with that single branch & cutoff,
-    where cutoff_rank <= rank.
-    If 'branch' is empty, return one row per college with ALL eligible branches under that category.
+    If 'branch' is provided: list colleges with that single branch whose cutoff_rank <= rank.
+    If 'branch' is blank: for each college, list *all* branches whose cutoff_rank <= rank.
     """
-
     # 1) Validate category
     if category not in CATEGORIES:
         raise HTTPException(
@@ -96,35 +80,31 @@ async def predict(
             detail=f"Unknown category '{category}'. Valid categories: {CATEGORIES}"
         )
 
-    # 2) Filter DataFrame to the selected category
+    # 2) Filter DF by category
     df_cat = df[df["category"] == category]
 
     if branch:
-        # SINGLE‐BRANCH MODE: check branch code existence
+        # Single‐branch mode
         if branch not in df_cat["branch_code"].unique():
             raise HTTPException(
                 status_code=400,
                 detail=f"Unknown branch '{branch}' for category '{category}'"
             )
 
-        # Filter by branch_code & cutoff <= rank
         df_sb = df_cat[(df_cat["branch_code"] == branch) & (df_cat["cutoff_rank"] <= rank)]
-
         out = []
         for _, row in df_sb.iterrows():
             out.append({
                 "code": row["college_code"],
                 "college_name": row["college_name"],
                 "branch": row["branch_code"],
-                "cutoff_rank": int(row["cutoff_rank"]),
+                "cutoff_rank": int(row["cutoff_rank"])
             })
         return out
 
     else:
-        # MULTI‐BRANCH MODE: all branches for each college where cutoff <= rank
+        # Multi‐branch mode
         df_mb = df_cat[df_cat["cutoff_rank"] <= rank]
-
-        # Group by (college_code, college_name)
         grouped = df_mb.groupby(["college_code", "college_name"])
         out = []
         for (code, name), group in grouped:
