@@ -1,67 +1,174 @@
-# file: main.py
+# ─────────────────────────────────────────────────────────────────────────────
+# main.py
+#
+# 1) On first run, reads every CSV under "cet_cutoffs/" and writes them
+#    into a single SQLite table called `cutoffs`.  Then:
+# 2) Exposes three FastAPI GET endpoints:
+#      • /branches
+#      • /categories
+#      • /predict?rank=...&category=...[&branch=...]
+# ─────────────────────────────────────────────────────────────────────────────
 import os
+import sqlite3
 import pandas as pd
-from fastapi import FastAPI, HTTPException
-from typing import Optional
+from fastapi import FastAPI, HTTPException, Query
 
-app = FastAPI(
-    title="Multi‐Course CET College Predictor",
-    description="Give me rank, category, course, and optional branch → I return eligible colleges.",
-    version="1.0",
-)
+app = FastAPI()
+DB_PATH = "cutoffs.db"
 
-# Pre‐define valid course names:
-VALID_COURSES = {"engineering", "pharma", "bscnurs", "agri"}
+
+def create_and_seed_db():
+    # If the SQLite DB already exists, do nothing.
+    if os.path.exists(DB_PATH):
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    # Create the single table "cutoffs" with exactly these columns:
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS cutoffs (
+        college_code TEXT,
+        college_name TEXT,
+        branch_code TEXT,
+        category TEXT,
+        cutoff_rank INTEGER
+    );
+    """)
+
+    # Look in "cet_cutoffs/" for *.csv files
+    csv_folder = "cet_cutoffs"
+    if not os.path.isdir(csv_folder):
+        raise RuntimeError(f"Expected folder '{csv_folder}' to exist, but it does not.")
+
+    for csv_file in sorted(os.listdir(csv_folder)):
+        if not csv_file.lower().endswith(".csv"):
+            continue
+
+        path = os.path.join(csv_folder, csv_file)
+        # Read with dtype=str so we can convert "cutoff_rank" afterward
+        df = pd.read_csv(path, dtype=str)
+
+        # Verify that required columns are present
+        required_cols = ["college_code", "college_name", "branch_code", "category", "cutoff_rank"]
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            raise HTTPException(
+                status_code=500,
+                detail=f"CSV file '{csv_file}' is missing columns: {missing}"
+            )
+
+        # Convert cutoff_rank → integer
+        df["cutoff_rank"] = df["cutoff_rank"].astype(int)
+
+        # Insert every row into the SQLite table
+        rows = df[required_cols].values.tolist()
+        cursor.executemany(
+            "INSERT INTO cutoffs VALUES (?, ?, ?, ?, ?);",
+            rows
+        )
+        print(f"  • Inserted {len(rows)} rows from {csv_file}")
+
+    conn.commit()
+    conn.close()
+    print("SQLite database created at", DB_PATH)
+
+
+# Seed the database on startup if needed
+create_and_seed_db()
+
+
+@app.get("/branches")
+def list_branches():
+    """
+    Return a JSON array of all distinct branch_code values,
+    sorted ascending (e.g. ["AI", "AR", "BT", "CA", ...]).
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT branch_code FROM cutoffs ORDER BY branch_code ASC;")
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [row[0] for row in rows]
+
+
+@app.get("/categories")
+def list_categories():
+    """
+    Return a JSON array of all distinct category values,
+    sorted ascending (e.g. ["1G", "1K", "2AG", "2AK", ...]).
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT category FROM cutoffs ORDER BY category ASC;")
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [row[0] for row in rows]
+
 
 @app.get("/predict")
 def predict(
-    rank: int,
-    category: str,
-    course: str,
-    branch: Optional[str] = None
+    rank: int = Query(..., ge=1),
+    category: str = Query(...),
+    branch: str | None = None
 ):
-    course = course.strip().lower()
-    if course not in VALID_COURSES:
-        raise HTTPException(status_code=400, detail=f"Unknown course ‘{course}’. Must be one of {VALID_COURSES}.")
+    """
+    Query string params:
+      • rank (integer, ≥ 1)      → your CET rank
+      • category (string)         → e.g. "1G", "SCG", etc.
+      • branch (optional string)  → e.g. "CS", "EC", "AI", etc.
 
-    cat = category.strip().upper()
-    # Determine “gen” vs “hk” by suffix—if category ends with “H”, treat as HYD/KAR:
-    seat_type = "hk" if cat.endswith("H") else "gen"
+    Returns an array of college records:
+      [
+        {
+          "college_code": "...",
+          "college_name": "...",
+          "branch_code": "...",
+          "cutoff_rank": 12345
+        },
+        ...
+      ]
 
-    # Build the CSV filename, e.g. “engineering_gen.csv”
-    filename = f"{course}_{seat_type}.csv"
-    csv_path = os.path.join("cet_cutoffs", filename)
+    Filter logic:
+      • cutoff_rank >= given rank
+      • category == given category
+      • if `branch` is provided, also filter branch_code == branch
+      • sort final results by cutoff_rank ASC (lowest cutoff at top).
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
 
-    if not os.path.isfile(csv_path):
-        raise HTTPException(
-            status_code=404,
-            detail=f"Cutoff CSV not found for course ‘{course}’ and category ‘{category}’. Tried: {filename}"
+    if branch:
+        cursor.execute(
+            "SELECT college_code, college_name, branch_code, cutoff_rank "
+            "FROM cutoffs "
+            "WHERE category = ? AND branch_code = ? AND cutoff_rank >= ? "
+            "ORDER BY cutoff_rank ASC;",
+            (category, branch, rank)
+        )
+    else:
+        cursor.execute(
+            "SELECT college_code, college_name, branch_code, cutoff_rank "
+            "FROM cutoffs "
+            "WHERE category = ? AND cutoff_rank >= ? "
+            "ORDER BY cutoff_rank ASC;",
+            (category, rank)
         )
 
-    # 1) Read the CSV into a DataFrame
-    df = pd.read_csv(csv_path, dtype=str)
+    rows = cursor.fetchall()
+    conn.close()
 
-    # 2) Filter by Category (exact match, uppercase): 
-    df = df[df["Category"].str.strip().str.upper() == cat]
-    if df.empty:
-        return {"eligible": []}
+    # Convert to list of dicts
+    results = []
+    for r in rows:
+        results.append({
+            "college_code": r[0],
+            "college_name": r[1],
+            "branch_code": r[2],
+            "cutoff_rank": r[3]
+        })
 
-    # 3) Convert “Cutoff Rank” to numeric (some PDFs may leave “–” or blanks)
-    df["Cutoff Rank"] = pd.to_numeric(df["Cutoff Rank"], errors="coerce")
-    df = df[df["Cutoff Rank"].notna()]
-
-    # 4) Keep only rows where “Cutoff Rank” ≤ user’s rank
-    df = df[df["Cutoff Rank"] <= rank]
-
-    # 5) If branch was provided, filter that too:
-    if branch:
-        br = branch.strip().upper()
-        df = df[df["Branch"].str.strip().str.upper() == br]
-
-    # 6) Sort by ascending cutoff:
-    df = df.sort_values("Cutoff Rank", ascending=True)
-
-    # 7) Return only the columns we care about
-    result = df[["Code", "College Name", "Branch", "Cutoff Rank"]].to_dict(orient="records")
-    return {"eligible": result}
+    return results
 
