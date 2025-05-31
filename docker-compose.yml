@@ -1,55 +1,25 @@
+# docker-compose.yml
+
 version: "3.8"
 
 services:
-
-  # --------------------------
-  # 1) Backend: FastAPI + Uvicorn
-  # --------------------------
-  backend:
+  cet-backend:
     build:
       context: ./college_predictor_backend
       dockerfile: Dockerfile
     container_name: cet-backend
+    ports:
+      - "8000:8000"
     restart: unless-stopped
-    volumes:
-      - ./college_predictor_backend/cutoffs.db:/app/cutoffs.db:ro
-    expose:
-      - "8000"
-    networks:
-      - cet-network
 
-  # --------------------------
-  # 2) Frontend: React → Nginx
-  # --------------------------
-  frontend:
+  cet-frontend:
     build:
       context: ./college-predictor-frontend
       dockerfile: Dockerfile
     container_name: cet-frontend
-    restart: unless-stopped
-    expose:
-      - "80"
-    networks:
-      - cet-network
-
-  # --------------------------
-  # 3) Proxy: Nginx reverse proxy
-  # --------------------------
-  proxy:
-    build:
-      context: ./proxy
-      dockerfile: Dockerfile
-    container_name: cet-proxy
-    restart: unless-stopped
     ports:
       - "80:80"
     depends_on:
-      - backend
-      - frontend
-    networks:
-      - cet-network
-
-networks:
-  cet-network:
-    driver: bridge
+      - cet-backend
+    restart: unless-stopped
 
