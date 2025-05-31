@@ -1,5 +1,5 @@
 fastapi==0.95.0
 uvicorn[standard]==0.22.0
 pandas==2.0.2
-python‐multipart==0.0.6
+python-multipart==0.0.6
 tabula-py>=2.7.0
