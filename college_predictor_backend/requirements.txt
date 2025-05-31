@@ -1,8 +1,8 @@
-# 1) Pin NumPy and pandas so they match ABIs
-numpy==1.25.3
+# 1) Pin NumPy and pandas to matching, available versions under Python 3.11
+numpy==1.25.2
 pandas==2.1.1
 
-# 2) Then install tabula-py (which will pick up those pandas & numpy versions)
+# 2) Then install tabula-py (which will pick up pandas & numpy)
 tabula-py==2.13.0
 
 # 3) The rest of your FastAPI stack
