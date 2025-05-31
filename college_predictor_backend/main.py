@@ -1,121 +1,154 @@
-from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel
+# main.py
+
+from fastapi import FastAPI, HTTPException
 from typing import List, Optional
 import pandas as pd
-from pathlib import Path
+import glob
+import os
 
-app = FastAPI(title="College Cutoff Predictor")
+app = FastAPI(
+    title="College Cutoff Predictor",
+    description="Lookup college/branch cutoffs across multiple courses (ENGG, BSCNURS, PHARMA, agri, etc.)",
+    version="1.0.0",
+)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 1) On startup, read the CSV into a DataFrame (only once).
-#    We assume the file is exactly at `cet_cutoffs/cet_cutoffs_r1_prov.csv`
-#    relative to this script's folder.
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────────
+# At startup: read every “*_normalized.csv” file from cet_cutoffs/ and concatenate
+# into a single pandas DataFrame. Then coerce cutoff_rank → numeric and drop NaNs.
+# ────────────────────────────────────────────────────────────────────────────────
 
-BASE_DIR = Path(__file__).parent
-CSV_PATH = BASE_DIR / "cet_cutoffs" / "cet_cutoffs_r1_prov.csv"
+DATA_DIR = "cet_cutoffs"
 
-if not CSV_PATH.exists():
-    raise FileNotFoundError(f"Cannot find cutoff CSV at {CSV_PATH!r}")
+def load_all_normalized_csvs(data_dir: str) -> pd.DataFrame:
+    """
+    Finds every CSV ending in “_normalized.csv” under `data_dir`, reads it,
+    and concatenates into a single DataFrame.
+    """
+    pattern = os.path.join(data_dir, "*_normalized.csv")
+    file_list = glob.glob(pattern)
+    if not file_list:
+        # If no “_normalized.csv” exists, raise an error
+        raise RuntimeError(f"No normalized CSVs found under {data_dir!r} (looking for '*_normalized.csv').")
 
-# Load the entire CSV into a pandas DataFrame
-# We expect the CSV to have at least these columns:
-#   college_code, college_name, branch_code, category, cutoff_rank
-# (all lowercase columns, exactly this spelling).
-df = pd.read_csv(CSV_PATH, dtype={
-    "college_code": str,
-    "college_name": str,
-    "branch_code": str,
-    "category": str,
-    "cutoff_rank": int,
-})
-# Ensure column names are exactly as expected (lowercase)
-df.columns = [col.strip() for col in df.columns]
+    dfs = []
+    for path in sorted(file_list):
+        df = pd.read_csv(path, dtype=str, keep_default_na=False)
+        dfs.append(df)
 
-# Precompute sorted, unique categories and branches for the dropdowns
-ALL_CATEGORIES = sorted(df["category"].dropna().unique().tolist())
-ALL_BRANCHES = sorted(df["branch_code"].dropna().unique().tolist())
+    merged = pd.concat(dfs, ignore_index=True)
+    return merged
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 2) Pydantic model for a single college entry returned by /predict
-# ──────────────────────────────────────────────────────────────────────────────
-class CollegeOut(BaseModel):
-    college_code: str
-    college_name: str
-    branch_code: str
-    category: str
-    cutoff_rank: int
+try:
+    df_all = load_all_normalized_csvs(DATA_DIR)
+except Exception as e:
+    # If startup fails (e.g. missing folder or no CSVs), crash quickly.
+    raise RuntimeError(f"Failed to load normalized CSVs: {e!s}")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 3) Endpoint: GET /categories
-#    Returns JSON list of category strings.
-# ──────────────────────────────────────────────────────────────────────────────
+# Coerce cutoff_rank to numeric. Any non‐numeric values become NaN → then drop them.
+df_all["cutoff_rank"] = pd.to_numeric(df_all["cutoff_rank"], errors="coerce")
+df_all = df_all.dropna(subset=["cutoff_rank"])
+df_all["cutoff_rank"] = df_all["cutoff_rank"].astype(int)
+
+# If your normalized CSVs do not include college_code/college_name, comment out these two lines:
+# Otherwise, keep them. If they’re missing, Pandas will create those columns as NaN.
+if "college_code" not in df_all.columns:
+    # Create a dummy column so that code below never breaks
+    df_all["college_code"] = ""
+if "college_name" not in df_all.columns:
+    df_all["college_name"] = ""
+
+# Precompute sorted, unique lists for the dropdown endpoints:
+all_courses    = sorted(df_all["course"].dropna().unique().tolist())
+all_categories = sorted(df_all["category"].dropna().unique().tolist())
+all_branches   = sorted(df_all["branch"].dropna().unique().tolist())
+
+# ────────────────────────────────────────────────────────────────────────────────
+#   GET /courses
+#   Returns a JSON array of all available “course” strings (e.g. ["ENGG","BSCNURS","PHARMA","agri",…]).
+# ────────────────────────────────────────────────────────────────────────────────
+@app.get("/courses", response_model=List[str])
+def get_courses():
+    return all_courses
+
+
+# ────────────────────────────────────────────────────────────────────────────────
+#   GET /categories
+#   Returns a JSON array of all available “category” strings (e.g. ["1G","1K","1R","2AG",…,"GM","SCG","…"]).
+# ────────────────────────────────────────────────────────────────────────────────
 @app.get("/categories", response_model=List[str])
 def get_categories():
-    return ALL_CATEGORIES
+    return all_categories
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 4) Endpoint: GET /branches
-#    Returns JSON list of branch strings.
-# ──────────────────────────────────────────────────────────────────────────────
+
+# ────────────────────────────────────────────────────────────────────────────────
+#   GET /branches
+#   Returns a JSON array of all available “branch” strings 
+#   (e.g. ["AI Artificial Intelligence","AR Architecture","CE Civil","CS Computers",…]).
+# ────────────────────────────────────────────────────────────────────────────────
 @app.get("/branches", response_model=List[str])
 def get_branches():
-    return ALL_BRANCHES
+    return all_branches
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 5) Endpoint: GET /predict
+
+# ────────────────────────────────────────────────────────────────────────────────
+#   GET /find
+#   Query parameters:
+#     • course   (e.g. “ENGG”)
+#     • category (e.g. “GM”)
+#     • rank     (an integer; we will return only rows whose cutoff_rank >= rank)
+#     • branch   (optional; e.g. “EE Electrical”). If provided, filter to exactly that branch.
 #
-#    Query parameters:
-#      - rank: int        (the student's CET rank)
-#      - category: str    (e.g. "GM", "1G", etc.; must be one of ALL_CATEGORIES)
-#      - branch: Optional[str] (optional; if provided, must be one of ALL_BRANCHES)
+#   Returns: a JSON array of objects, each having:
+#     {
+#       "course":       "...",
+#       "college_code": "...",   # (empty string if your CSV had none)
+#       "college_name": "...",   # (empty string if your CSV had none)
+#       "branch":       "...",
+#       "category":     "...",
+#       "cutoff_rank":   12345
+#     }
 #
-#    Returns a JSON array of all colleges (as CollegeOut) whose cutoff_rank <= rank,
-#    filtered by that category, and if branch is provided, also by that branch. 
-#    The output is sorted ascending by cutoff_rank.
-# ──────────────────────────────────────────────────────────────────────────────
-@app.get("/predict", response_model=List[CollegeOut])
-def predict(
-    rank: int = Query(..., ge=1, description="Your CET rank (integer, ≥1)"),
-    category: str = Query(..., description="Category code (e.g. GM, 1G, 2AK, etc.)"),
-    branch: Optional[str] = Query(None, description="(Optional) Branch code (e.g. AI, EE, CE, etc.)")
+#   The result set is sorted in ascending order of cutoff_rank.
+# ────────────────────────────────────────────────────────────────────────────────
+@app.get("/find")
+def find_colleges(
+    course: str,
+    category: str,
+    rank: int,
+    branch: Optional[str] = None
 ):
-    # 1) Validate category exists
-    if category not in ALL_CATEGORIES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Category must be one of {ALL_CATEGORIES!r}"
-        )
+    # Validate course/category
+    if course not in all_courses:
+        raise HTTPException(status_code=400, detail=f"Invalid course: {course!r}")
+    if category not in all_categories:
+        raise HTTPException(status_code=400, detail=f"Invalid category: {category!r}")
 
-    # 2) If branch is provided, validate it exists
-    if branch is not None and branch not in ALL_BRANCHES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Branch must be one of {ALL_BRANCHES!r} (or omitted)."
-        )
+    # Filter the DataFrame
+    df_filtered = df_all[
+        (df_all["course"] == course) &
+        (df_all["category"] == category) &
+        (df_all["cutoff_rank"] >= rank)
+    ]
 
-    # 3) Filter DataFrame by category, then by cutoff_rank ≤ rank
-    sub = df[df["category"] == category].copy()
-    sub = sub[sub["cutoff_rank"] <= rank]
+    if branch:
+        if branch not in all_branches:
+            raise HTTPException(status_code=400, detail=f"Invalid branch: {branch!r}")
+        df_filtered = df_filtered[df_filtered["branch"] == branch]
 
-    # 4) If branch is provided, filter by that branch_code
-    if branch is not None:
-        sub = sub[sub["branch_code"] == branch]
+    # Sort ascending by cutoff_rank
+    df_filtered = df_filtered.sort_values("cutoff_rank", ascending=True)
 
-    # 5) Sort ascending by cutoff_rank
-    sub = sub.sort_values("cutoff_rank", ascending=True)
-
-    # 6) Convert to list of Pydantic models (dictionaries)
+    # Build the JSON array
     results = []
-    for _, row in sub.iterrows():
-        results.append(
-            CollegeOut(
-                college_code=row["college_code"],
-                college_name=row["college_name"],
-                branch_code=row["branch_code"],
-                category=row["category"],
-                cutoff_rank=int(row["cutoff_rank"])
-            )
-        )
+    for _, row in df_filtered.iterrows():
+        results.append({
+            "course":       row["course"],
+            "college_code": row["college_code"],   # "" if not present
+            "college_name": row["college_name"],   # "" if not present
+            "branch":       row["branch"],
+            "category":     row["category"],
+            "cutoff_rank":   int(row["cutoff_rank"]),
+        })
+
     return results
 
