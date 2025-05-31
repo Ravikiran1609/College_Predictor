@@ -16,6 +16,6 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
-  "proxy": "http://backend:8000"  // <-- ensures dev server will proxy /predict → backend
+  "proxy": "http://backend:8000"
 }
 
