@@ -1,0 +1,56 @@
+version: "3.8"
+
+services:
+  # ----------------------------------------------------
+  # Backend: FastAPI + Uvicorn
+  # ----------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cet-backend
+    restart: unless-stopped
+    volumes:
+      - ./backend/cutoffs.db:/app/cutoffs.db:ro
+    # It already exposes 8000 in its Dockerfile
+    expose:
+      - "8000"
+    networks:
+      - cet-network
+
+  # ----------------------------------------------------
+  # Frontend: React static build served by Nginx
+  # ----------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cet-frontend
+    restart: unless-stopped
+    # No need to expose port to host; we let the proxy access it
+    expose:
+      - "80"
+    networks:
+      - cet-network
+
+  # ----------------------------------------------------
+  # Proxy: Nginx (routes "/" → frontend; "/predict" → backend)
+  # ----------------------------------------------------
+  proxy:
+    build:
+      context: ./proxy
+      dockerfile: Dockerfile
+    container_name: cet-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - cet-network
+
+networks:
+  cet-network:
+    driver: bridge
+
