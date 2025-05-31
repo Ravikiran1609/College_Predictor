@@ -1,174 +1,121 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# main.py
-#
-# 1) On first run, reads every CSV under "cet_cutoffs/" and writes them
-#    into a single SQLite table called `cutoffs`.  Then:
-# 2) Exposes three FastAPI GET endpoints:
-#      • /branches
-#      • /categories
-#      • /predict?rank=...&category=...[&branch=...]
-# ─────────────────────────────────────────────────────────────────────────────
-import os
-import sqlite3
-import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel
+from typing import List, Optional
+import pandas as pd
+from pathlib import Path
 
-app = FastAPI()
-DB_PATH = "cutoffs.db"
+app = FastAPI(title="College Cutoff Predictor")
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 1) On startup, read the CSV into a DataFrame (only once).
+#    We assume the file is exactly at `cet_cutoffs/cet_cutoffs_r1_prov.csv`
+#    relative to this script's folder.
+# ──────────────────────────────────────────────────────────────────────────────
 
-def create_and_seed_db():
-    # If the SQLite DB already exists, do nothing.
-    if os.path.exists(DB_PATH):
-        return
+BASE_DIR = Path(__file__).parent
+CSV_PATH = BASE_DIR / "cet_cutoffs" / "cet_cutoffs_r1_prov.csv"
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+if not CSV_PATH.exists():
+    raise FileNotFoundError(f"Cannot find cutoff CSV at {CSV_PATH!r}")
 
-    # Create the single table "cutoffs" with exactly these columns:
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS cutoffs (
-        college_code TEXT,
-        college_name TEXT,
-        branch_code TEXT,
-        category TEXT,
-        cutoff_rank INTEGER
-    );
-    """)
+# Load the entire CSV into a pandas DataFrame
+# We expect the CSV to have at least these columns:
+#   college_code, college_name, branch_code, category, cutoff_rank
+# (all lowercase columns, exactly this spelling).
+df = pd.read_csv(CSV_PATH, dtype={
+    "college_code": str,
+    "college_name": str,
+    "branch_code": str,
+    "category": str,
+    "cutoff_rank": int,
+})
+# Ensure column names are exactly as expected (lowercase)
+df.columns = [col.strip() for col in df.columns]
 
-    # Look in "cet_cutoffs/" for *.csv files
-    csv_folder = "cet_cutoffs"
-    if not os.path.isdir(csv_folder):
-        raise RuntimeError(f"Expected folder '{csv_folder}' to exist, but it does not.")
+# Precompute sorted, unique categories and branches for the dropdowns
+ALL_CATEGORIES = sorted(df["category"].dropna().unique().tolist())
+ALL_BRANCHES = sorted(df["branch_code"].dropna().unique().tolist())
 
-    for csv_file in sorted(os.listdir(csv_folder)):
-        if not csv_file.lower().endswith(".csv"):
-            continue
+# ──────────────────────────────────────────────────────────────────────────────
+# 2) Pydantic model for a single college entry returned by /predict
+# ──────────────────────────────────────────────────────────────────────────────
+class CollegeOut(BaseModel):
+    college_code: str
+    college_name: str
+    branch_code: str
+    category: str
+    cutoff_rank: int
 
-        path = os.path.join(csv_folder, csv_file)
-        # Read with dtype=str so we can convert "cutoff_rank" afterward
-        df = pd.read_csv(path, dtype=str)
+# ──────────────────────────────────────────────────────────────────────────────
+# 3) Endpoint: GET /categories
+#    Returns JSON list of category strings.
+# ──────────────────────────────────────────────────────────────────────────────
+@app.get("/categories", response_model=List[str])
+def get_categories():
+    return ALL_CATEGORIES
 
-        # Verify that required columns are present
-        required_cols = ["college_code", "college_name", "branch_code", "category", "cutoff_rank"]
-        missing = [c for c in required_cols if c not in df.columns]
-        if missing:
-            raise HTTPException(
-                status_code=500,
-                detail=f"CSV file '{csv_file}' is missing columns: {missing}"
-            )
+# ──────────────────────────────────────────────────────────────────────────────
+# 4) Endpoint: GET /branches
+#    Returns JSON list of branch strings.
+# ──────────────────────────────────────────────────────────────────────────────
+@app.get("/branches", response_model=List[str])
+def get_branches():
+    return ALL_BRANCHES
 
-        # Convert cutoff_rank → integer
-        df["cutoff_rank"] = df["cutoff_rank"].astype(int)
-
-        # Insert every row into the SQLite table
-        rows = df[required_cols].values.tolist()
-        cursor.executemany(
-            "INSERT INTO cutoffs VALUES (?, ?, ?, ?, ?);",
-            rows
-        )
-        print(f"  • Inserted {len(rows)} rows from {csv_file}")
-
-    conn.commit()
-    conn.close()
-    print("SQLite database created at", DB_PATH)
-
-
-# Seed the database on startup if needed
-create_and_seed_db()
-
-
-@app.get("/branches")
-def list_branches():
-    """
-    Return a JSON array of all distinct branch_code values,
-    sorted ascending (e.g. ["AI", "AR", "BT", "CA", ...]).
-    """
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT branch_code FROM cutoffs ORDER BY branch_code ASC;")
-    rows = cursor.fetchall()
-    conn.close()
-
-    return [row[0] for row in rows]
-
-
-@app.get("/categories")
-def list_categories():
-    """
-    Return a JSON array of all distinct category values,
-    sorted ascending (e.g. ["1G", "1K", "2AG", "2AK", ...]).
-    """
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT DISTINCT category FROM cutoffs ORDER BY category ASC;")
-    rows = cursor.fetchall()
-    conn.close()
-
-    return [row[0] for row in rows]
-
-
-@app.get("/predict")
+# ──────────────────────────────────────────────────────────────────────────────
+# 5) Endpoint: GET /predict
+#
+#    Query parameters:
+#      - rank: int        (the student's CET rank)
+#      - category: str    (e.g. "GM", "1G", etc.; must be one of ALL_CATEGORIES)
+#      - branch: Optional[str] (optional; if provided, must be one of ALL_BRANCHES)
+#
+#    Returns a JSON array of all colleges (as CollegeOut) whose cutoff_rank <= rank,
+#    filtered by that category, and if branch is provided, also by that branch. 
+#    The output is sorted ascending by cutoff_rank.
+# ──────────────────────────────────────────────────────────────────────────────
+@app.get("/predict", response_model=List[CollegeOut])
 def predict(
-    rank: int = Query(..., ge=1),
-    category: str = Query(...),
-    branch: str | None = None
+    rank: int = Query(..., ge=1, description="Your CET rank (integer, ≥1)"),
+    category: str = Query(..., description="Category code (e.g. GM, 1G, 2AK, etc.)"),
+    branch: Optional[str] = Query(None, description="(Optional) Branch code (e.g. AI, EE, CE, etc.)")
 ):
-    """
-    Query string params:
-      • rank (integer, ≥ 1)      → your CET rank
-      • category (string)         → e.g. "1G", "SCG", etc.
-      • branch (optional string)  → e.g. "CS", "EC", "AI", etc.
-
-    Returns an array of college records:
-      [
-        {
-          "college_code": "...",
-          "college_name": "...",
-          "branch_code": "...",
-          "cutoff_rank": 12345
-        },
-        ...
-      ]
-
-    Filter logic:
-      • cutoff_rank >= given rank
-      • category == given category
-      • if `branch` is provided, also filter branch_code == branch
-      • sort final results by cutoff_rank ASC (lowest cutoff at top).
-    """
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    if branch:
-        cursor.execute(
-            "SELECT college_code, college_name, branch_code, cutoff_rank "
-            "FROM cutoffs "
-            "WHERE category = ? AND branch_code = ? AND cutoff_rank >= ? "
-            "ORDER BY cutoff_rank ASC;",
-            (category, branch, rank)
-        )
-    else:
-        cursor.execute(
-            "SELECT college_code, college_name, branch_code, cutoff_rank "
-            "FROM cutoffs "
-            "WHERE category = ? AND cutoff_rank >= ? "
-            "ORDER BY cutoff_rank ASC;",
-            (category, rank)
+    # 1) Validate category exists
+    if category not in ALL_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Category must be one of {ALL_CATEGORIES!r}"
         )
 
-    rows = cursor.fetchall()
-    conn.close()
+    # 2) If branch is provided, validate it exists
+    if branch is not None and branch not in ALL_BRANCHES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Branch must be one of {ALL_BRANCHES!r} (or omitted)."
+        )
 
-    # Convert to list of dicts
+    # 3) Filter DataFrame by category, then by cutoff_rank ≤ rank
+    sub = df[df["category"] == category].copy()
+    sub = sub[sub["cutoff_rank"] <= rank]
+
+    # 4) If branch is provided, filter by that branch_code
+    if branch is not None:
+        sub = sub[sub["branch_code"] == branch]
+
+    # 5) Sort ascending by cutoff_rank
+    sub = sub.sort_values("cutoff_rank", ascending=True)
+
+    # 6) Convert to list of Pydantic models (dictionaries)
     results = []
-    for r in rows:
-        results.append({
-            "college_code": r[0],
-            "college_name": r[1],
-            "branch_code": r[2],
-            "cutoff_rank": r[3]
-        })
-
+    for _, row in sub.iterrows():
+        results.append(
+            CollegeOut(
+                college_code=row["college_code"],
+                college_name=row["college_name"],
+                branch_code=row["branch_code"],
+                category=row["category"],
+                cutoff_rank=int(row["cutoff_rank"])
+            )
+        )
     return results
 

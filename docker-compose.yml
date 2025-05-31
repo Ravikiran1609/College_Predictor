@@ -5,19 +5,16 @@ services:
     build:
       context: ./college_predictor_backend
       dockerfile: Dockerfile
-    container_name: cet-backend
     ports:
       - "8000:8000"
-    restart: unless-stopped
+    # (No need for volumes if everything is baked in.)
 
   frontend:
     build:
       context: ./college-predictor-frontend
       dockerfile: Dockerfile
-    container_name: cet-frontend
     ports:
       - "80:80"
     depends_on:
       - backend
-    restart: unless-stopped
 

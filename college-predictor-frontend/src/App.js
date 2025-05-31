@@ -1,212 +1,231 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// App.js
-//
-// Assumes your React app is served (for example) at http://localhost (port 80 or 3000),
-// and your FastAPI backend is running on http://localhost:8000.
-//
-// It always does fetch("http://localhost:8000/...") explicitly.
-//
-// ─────────────────────────────────────────────────────────────────────────────
-import React, { useEffect, useState } from "react";
+import React, { useState, useEffect } from "react";
+import "./App.css"; // if you want any basic styling; otherwise you can remove this import
 
 function App() {
-  // Backend base URL (adjust if your backend is on a different host/IP)
-  const BACKEND_BASE = "http://localhost:8000";
+  // ────────────────────────────────────────────────────────────────────────────
+  // 1) Component state
+  const [categories, setCategories] = useState([]);      // list of category codes
+  const [branches, setBranches] = useState([]);          // list of branch codes
+  const [errorCategories, setErrorCategories] = useState(false);
+  const [errorBranches, setErrorBranches] = useState(false);
 
-  // State for dropdowns and form
-  const [branches, setBranches] = useState([]);
-  const [categories, setCategories] = useState([]);
-  const [rank, setRank] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("");
-  const [selectedBranch, setSelectedBranch] = useState("");
-  const [results, setResults] = useState([]);
-  const [errorMsg, setErrorMsg] = useState("");
+  const [rank, setRank] = useState("");                  // user‐entered CET rank
+  const [category, setCategory] = useState("");          // selected category
+  const [branch, setBranch] = useState("");              // selected branch (optional)
 
-  // On component mount, fetch categories and branches from http://localhost:8000
+  const [results, setResults] = useState([]);            // array of objects returned from /predict
+  const [errorPredict, setErrorPredict] = useState(false);
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // 2) Base URL of backend:
+  //    If you run FastAPI on port 8000, use this base. Adjust if needed.
+  const BACKEND_URL = "http://localhost:8000";
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // 3) On mount, fetch categories and branches
   useEffect(() => {
-    // 1) Fetch categories
-    fetch(`${BACKEND_BASE}/categories`)
-      .then((res) => {
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status} fetching ${BACKEND_BASE}/categories`);
-        }
-        return res.json();
+    // Fetch categories
+    fetch(`${BACKEND_URL}/categories`)
+      .then((resp) => {
+        if (!resp.ok) throw new Error("Failed to load categories");
+        return resp.json();
       })
       .then((data) => {
         setCategories(data);
-        if (data.length > 0) {
-          setSelectedCategory(data[0]);
-        }
+        // default‐select first category if available
+        if (data.length > 0) setCategory(data[0]);
       })
-      .catch((err) => {
-        console.error("Failed to load categories:", err);
-        setErrorMsg("Could not load categories from backend.");
+      .catch((_) => {
+        setErrorCategories(true);
       });
 
-    // 2) Fetch branches
-    fetch(`${BACKEND_BASE}/branches`)
-      .then((res) => {
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status} fetching ${BACKEND_BASE}/branches`);
-        }
-        return res.json();
+    // Fetch branches
+    fetch(`${BACKEND_URL}/branches`)
+      .then((resp) => {
+        if (!resp.ok) throw new Error("Failed to load branches");
+        return resp.json();
       })
       .then((data) => {
+        // Prepend an “Any Branch” option (empty string)
         setBranches(data);
       })
-      .catch((err) => {
-        console.error("Failed to load branches:", err);
-        setErrorMsg("Could not load branches from backend.");
+      .catch((_) => {
+        setErrorBranches(true);
       });
   }, []);
 
+  // ────────────────────────────────────────────────────────────────────────────
+  // 4) When “Search” is clicked:
   const handleSearch = () => {
-    setErrorMsg("");
-    setResults([]);
+    setErrorPredict(false);
+    setResults([]); // clear any old results
 
-    // Validate rank
-    if (!rank || isNaN(Number(rank))) {
-      setErrorMsg("Please enter a valid numeric rank.");
+    // Input validation
+    const parsedRank = parseInt(rank, 10);
+    if (isNaN(parsedRank) || parsedRank < 1) {
+      alert("Please enter a valid positive integer for CET Rank.");
+      return;
+    }
+    if (!category) {
+      alert("Please select a Category.");
       return;
     }
 
-    if (!selectedCategory) {
-      setErrorMsg("Please select a category.");
-      return;
+    // Build query parameters
+    const params = new URLSearchParams({ rank: parsedRank.toString(), category });
+    if (branch) {
+      params.append("branch", branch);
     }
 
-    // Build the full URL to /predict
-    let url = `${BACKEND_BASE}/predict?rank=${encodeURIComponent(rank)}&category=${encodeURIComponent(
-      selectedCategory
-    )}`;
-    if (selectedBranch) {
-      url += `&branch=${encodeURIComponent(selectedBranch)}`;
-    }
-
-    fetch(url)
-      .then((res) => {
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status} fetching ${url}`);
-        }
-        return res.json();
+    fetch(`${BACKEND_URL}/predict?${params.toString()}`)
+      .then((resp) => {
+        if (!resp.ok) throw new Error("Predict failed");
+        return resp.json();
       })
       .then((data) => {
         setResults(data);
       })
-      .catch((err) => {
-        console.error("Error fetching predict:", err);
-        setErrorMsg("Search failed. Please verify backend is running.");
+      .catch((_) => {
+        setErrorPredict(true);
       });
   };
 
+  // ────────────────────────────────────────────────────────────────────────────
+  // 5) Render
   return (
-    <div style={{ padding: "1rem", fontFamily: "Arial, sans-serif" }}>
+    <div style={{ padding: "1rem", maxWidth: 800, margin: "0 auto" }}>
       <h1>College Cutoff Predictor</h1>
 
-      {errorMsg && (
-        <div
-          style={{
-            marginBottom: "1rem",
-            padding: "0.5rem",
-            backgroundColor: "#ffe6e6",
-            border: "1px solid #ff9999",
-            color: "#990000",
+      {/* Error box if branches or categories did not load */}
+      {errorCategories && (
+        <div style={{
+            background: "#f8d7da", 
+            color: "#721c24", 
+            padding: "0.75rem", 
+            borderRadius: 4,
+            border: "1px solid #f5c6cb",
+            marginBottom: "1rem"
           }}
         >
-          {errorMsg}
+          Could not load categories from backend.
+        </div>
+      )}
+      {errorBranches && (
+        <div style={{
+            background: "#f8d7da", 
+            color: "#721c24", 
+            padding: "0.75rem", 
+            borderRadius: 4,
+            border: "1px solid #f5c6cb",
+            marginBottom: "1rem"
+          }}
+        >
+          Could not load branches from backend.
         </div>
       )}
 
       <div style={{ marginBottom: "1rem" }}>
-        <label style={{ marginRight: "0.5rem" }}>
+        <label style={{ display: "block", marginBottom: 4 }}>
           Your CET Rank:
-          <input
-            type="number"
-            value={rank}
-            onChange={(e) => setRank(e.target.value)}
-            style={{ marginLeft: "0.5rem", width: "100px" }}
-          />
         </label>
+        <input
+          type="number"
+          min="1"
+          value={rank}
+          onChange={e => setRank(e.target.value)}
+          style={{ padding: "0.5rem", width: "100%" }}
+          placeholder="Enter your CET rank (e.g. 12000)"
+        />
       </div>
 
       <div style={{ marginBottom: "1rem" }}>
-        <label style={{ marginRight: "0.5rem" }}>
+        <label style={{ display: "block", marginBottom: 4 }}>
           Category:
-          <select
-            value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
-            style={{ marginLeft: "0.5rem" }}
-          >
-            {categories.map((cat) => (
-              <option key={cat} value={cat}>
-                {cat}
-              </option>
-            ))}
-          </select>
         </label>
+        <select
+          value={category}
+          onChange={e => setCategory(e.target.value)}
+          style={{ padding: "0.5rem", width: "100%" }}
+          disabled={errorCategories || categories.length === 0}
+        >
+          {categories.map((cat) => (
+            <option key={cat} value={cat}>
+              {cat}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div style={{ marginBottom: "1rem" }}>
-        <label style={{ marginRight: "0.5rem" }}>
+        <label style={{ display: "block", marginBottom: 4 }}>
           Branch (optional):
-          <select
-            value={selectedBranch}
-            onChange={(e) => setSelectedBranch(e.target.value)}
-            style={{ marginLeft: "0.5rem" }}
-          >
-            <option value="">— Any Branch —</option>
-            {branches.map((br) => (
-              <option key={br} value={br}>
-                {br}
-              </option>
-            ))}
-          </select>
         </label>
+        <select
+          value={branch}
+          onChange={e => setBranch(e.target.value)}
+          style={{ padding: "0.5rem", width: "100%" }}
+          disabled={errorBranches || branches.length === 0}
+        >
+          <option value="">— Any Branch —</option>
+          {branches.map((br) => (
+            <option key={br} value={br}>
+              {br}
+            </option>
+          ))}
+        </select>
       </div>
 
-      <button onClick={handleSearch} style={{ padding: "0.5rem 1rem" }}>
+      <button
+        onClick={handleSearch}
+        style={{
+          padding: "0.75rem 1.5rem",
+          fontSize: "1rem",
+          cursor: "pointer",
+          marginBottom: "1rem"
+        }}
+      >
         Search
       </button>
 
-      <hr style={{ margin: "1.5rem 0" }} />
-
-      {results.length > 0 ? (
-        <table
-          style={{
-            borderCollapse: "collapse",
-            width: "100%",
-            maxWidth: "800px",
+      {/* If predict call failed */}
+      {errorPredict && (
+        <div style={{
+            background: "#f8d7da", 
+            color: "#721c24", 
+            padding: "0.75rem", 
+            borderRadius: 4,
+            border: "1px solid #f5c6cb",
+            marginBottom: "1rem"
           }}
         >
+          Could not fetch predictions. Please try again.
+        </div>
+      )}
+
+      {/* Results table */}
+      {results.length > 0 ? (
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
-            <tr>
-              <th style={{ border: "1px solid #ccc", padding: "0.5rem" }}>
-                College Code
-              </th>
-              <th style={{ border: "1px solid #ccc", padding: "0.5rem" }}>
-                College Name
-              </th>
-              <th style={{ border: "1px solid #ccc", padding: "0.5rem" }}>
-                Branch
-              </th>
-              <th style={{ border: "1px solid #ccc", padding: "0.5rem" }}>
-                Cutoff Rank
-              </th>
+            <tr style={{ background: "#f2f2f2" }}>
+              <th style={{ padding: "0.5rem", border: "1px solid #ccc" }}>Code</th>
+              <th style={{ padding: "0.5rem", border: "1px solid #ccc" }}>College Name</th>
+              <th style={{ padding: "0.5rem", border: "1px solid #ccc" }}>Branch</th>
+              <th style={{ padding: "0.5rem", border: "1px solid #ccc" }}>Cutoff Rank</th>
             </tr>
           </thead>
           <tbody>
-            {results.map((row, idx) => (
-              <tr key={idx}>
-                <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+            {results.map((row) => (
+              <tr key={`${row.college_code}-${row.branch_code}`} >
+                <td style={{ padding: "0.5rem", border: "1px solid #ccc" }}>
                   {row.college_code}
                 </td>
-                <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                <td style={{ padding: "0.5rem", border: "1px solid #ccc" }}>
                   {row.college_name}
                 </td>
-                <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                <td style={{ padding: "0.5rem", border: "1px solid #ccc" }}>
                   {row.branch_code}
                 </td>
-                <td style={{ border: "1px solid #ddd", padding: "0.5rem" }}>
+                <td style={{ padding: "0.5rem", border: "1px solid #ccc" }}>
                   {row.cutoff_rank}
                 </td>
               </tr>
@@ -214,7 +233,12 @@ function App() {
           </tbody>
         </table>
       ) : (
-        <p>No results to display.</p>
+        // If no results *and* no error, show "No results to display."
+        !errorPredict && (
+          <p style={{ marginTop: "1rem", fontStyle: "italic" }}>
+            No results to display.
+          </p>
+        )
       )}
     </div>
   );
