@@ -14,6 +14,7 @@ app = FastAPI(
     version="1.0.0",
 )
 
+
 class CollegePrediction(BaseModel):
     college_code: str
     college_full_name: str
@@ -21,13 +22,16 @@ class CollegePrediction(BaseModel):
     category: str
     cutoff_rank: int
 
+
 @app.on_event("startup")
 async def startup():
     await database.connect()
 
+
 @app.on_event("shutdown")
 async def shutdown():
     await database.disconnect()
+
 
 @app.get(
     "/predict",
@@ -42,7 +46,7 @@ async def shutdown():
 async def predict_colleges(
     rank: int = Query(..., ge=0, description="Your CET rank (e.g., 12345)"),
     category: str = Query(
-        ..., min_length=2, max_length=4, description="Category code (e.g., GM, SCG, 2AG, etc.)"
+        ..., min_length=2, max_length=4, description="Category code (e.g., GM, 1G, 2AG, etc.)"
     ),
     branch: str = Query(
         ..., min_length=2, max_length=4, description="Branch code (e.g., CS, EC, ME, etc.)"
@@ -70,9 +74,6 @@ async def predict_colleges(
     values = {"category": category, "branch": branch, "rank": rank}
     rows = await database.fetch_all(query=query, values=values)
 
-    if not rows:
-        return []
-
     results = [
         CollegePrediction(
             college_code=row["college_code"],
@@ -85,6 +86,37 @@ async def predict_colleges(
     ]
     return results
 
+
 @app.get("/", include_in_schema=False)
 async def root():
     return {"message": "CET College Predictor API is running. Use /predict?rank=&category=&branch="}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW: Return a list of all distinct branches
+@app.get(
+    "/branches",
+    summary="Get all distinct branch codes",
+    description="Returns a list of all distinct branch codes (e.g. CS, EC, ME, etc.) available in the database.",
+    response_model=List[str],
+)
+async def list_branches():
+    query = "SELECT DISTINCT branch FROM cutoffs ORDER BY branch;"
+    rows = await database.fetch_all(query=query)
+    return [row["branch"] for row in rows]
+
+
+# NEW: Return a list of all distinct categories
+@app.get(
+    "/categories",
+    summary="Get all distinct category codes",
+    description="Returns a list of all distinct category codes (e.g. GM, 1G, 2AG, etc.) available in the database.",
+    response_model=List[str],
+)
+async def list_categories():
+    query = "SELECT DISTINCT category FROM cutoffs ORDER BY category;"
+    rows = await database.fetch_all(query=query)
+    return [row["category"] for row in rows]
+# ─────────────────────────────────────────────────────────────────────────────
+
+

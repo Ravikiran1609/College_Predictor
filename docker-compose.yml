@@ -1,12 +1,10 @@
-# =====================================
-# docker-compose.yml
-# =====================================
+version: "3.8"
 
 services:
 
-  # -------------------------------------
-  # 1) Backend Service (FastAPI + Uvicorn)
-  # -------------------------------------
+  # --------------------------
+  # 1) Backend: FastAPI + Uvicorn
+  # --------------------------
   backend:
     build:
       context: ./college_predictor_backend
@@ -20,9 +18,9 @@ services:
     networks:
       - cet-network
 
-  # -------------------------------------
-  # 2) Frontend Service (React → Nginx)
-  # -------------------------------------
+  # --------------------------
+  # 2) Frontend: React → Nginx
+  # --------------------------
   frontend:
     build:
       context: ./college-predictor-frontend
@@ -34,9 +32,9 @@ services:
     networks:
       - cet-network
 
-  # -------------------------------------
-  # 3) Proxy Service (Nginx → routes traffic)
-  # -------------------------------------
+  # --------------------------
+  # 3) Proxy: Nginx reverse proxy
+  # --------------------------
   proxy:
     build:
       context: ./proxy
