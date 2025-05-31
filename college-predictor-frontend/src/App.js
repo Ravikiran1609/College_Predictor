@@ -18,7 +18,7 @@ function App() {
   const tableRef = useRef(null);
 
   useEffect(() => {
-    // 1) Fetch categories
+    // Fetch categories
     fetch("/categories")
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load categories");
@@ -33,7 +33,7 @@ function App() {
         setError("Unable to load category list");
       });
 
-    // 2) Fetch branch codes
+    // Fetch branches
     fetch("/branches")
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load branches");
@@ -88,17 +88,26 @@ function App() {
     }
   };
 
+  // ──────────────────────────────────────────────────────────────────────────
+  // Download the results DIV as a PDF
+  // ──────────────────────────────────────────────────────────────────────────
   const handleDownloadPdf = async () => {
     if (!tableRef.current) return;
+    // 1) Render the table area to a high‐res canvas
     const canvas = await html2canvas(tableRef.current, { scale: 2 });
     const imgData = canvas.toDataURL("image/png");
-    const { jsPDF: JsPDF } = window.jspdf;
-    const pdf = new JsPDF("p", "pt", "a4");
+
+    // 2) Create a PDF instance (we imported `jsPDF` above)
+    const pdf = new jsPDF("p", "pt", "a4");
     pdf.setFontSize(18);
     pdf.text("Eligible Colleges", 40, 30);
+
+    // 3) Compute width/height to fit A4
     const pageWidth = pdf.internal.pageSize.getWidth();
     const imgWidth = pageWidth - 80;
     const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+    // 4) Add image and save
     pdf.addImage(imgData, "PNG", 40, 50, imgWidth, imgHeight);
     pdf.save("Eligible_Colleges.pdf");
   };
