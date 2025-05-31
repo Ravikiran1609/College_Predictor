@@ -12,7 +12,7 @@ COPY . .
 # 3) (Optional) Run the extraction script at build time if you prefer
 #    In many setups you might generate the CSVs locally and then just COPY them.
 #    If you want to extract at build-time, uncomment the next line:
-RUN python extract_all_cutoffs.py
+#RUN python extract_all_cutoffs.py
 
 # 4) Ensure the cet_cutoffs folder (with all .csv) is present in the image
 #    If you ran extract_all_cutoffs.py above, they already live in cet_cutoffs/.
