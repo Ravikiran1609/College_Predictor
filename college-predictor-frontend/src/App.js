@@ -1,308 +1,194 @@
-import React, { useEffect, useState, useRef } from "react";
-import "./App.css";
-
-// We will dynamically import jsPDF and html2canvas via a <script> tag in index.html
-// so we can just use window.jspdf.jsPDF and window.html2canvas.
+import React, { useEffect, useState } from 'react';
+import { jsPDF } from 'jspdf';
+import 'jspdf-autotable'; // Make sure you installed both jsPDF and jspdf-autotable in package.json as dependencies
 
 function App() {
-  const [courses, setCourses] = useState([]);
-  const [selectedCourse, setSelectedCourse] = useState("");
   const [categories, setCategories] = useState([]);
   const [branches, setBranches] = useState([]);
-  const [rank, setRank] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("");
-  const [selectedBranch, setSelectedBranch] = useState("");
+  const [selectedCourse, setSelectedCourse] = useState('engineering');
+  const [selectedCategory, setSelectedCategory] = useState('');
+  const [selectedBranch, setSelectedBranch] = useState('');
+  const [rank, setRank] = useState('');
   const [results, setResults] = useState([]);
 
-  const tableRef = useRef();
-
-  // Base URL of backend (adjust if needed; here we assume same host on port 8000)
-  const BASE_URL = "http://localhost:8000";
-
-  // 1) On mount, fetch courses
+  // Load categories on mount
   useEffect(() => {
-    fetch(`${BASE_URL}/courses`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to load courses");
-        return res.json();
+    fetch('/categories')
+      .then((resp) => {
+        if (!resp.ok) throw new Error('Failed to load categories');
+        return resp.json();
       })
-      .then((data) => {
-        setCourses(data);
-        if (data.length > 0) {
-          setSelectedCourse(data[0]);
-        }
-      })
-      .catch((err) => {
-        console.error(err);
-      });
+      .then(data => setCategories(data))
+      .catch(err => console.error(err));
   }, []);
 
-  // 2) When selectedCourse changes, fetch categories + branches for that course
+  // Load branches once course & category are selected
   useEffect(() => {
-    if (!selectedCourse) return;
-
-    // Fetch categories
-    fetch(`${BASE_URL}/categories?course=${encodeURIComponent(selectedCourse)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to load categories");
-        return res.json();
-      })
-      .then((data) => {
-        setCategories(data);
-        if (data.length > 0) {
-          setSelectedCategory(data[0]);
-        }
-      })
-      .catch((err) => {
-        console.error(err);
-        setCategories([]);
-        setSelectedCategory("");
-      });
-
-    // Fetch branches
-    fetch(`${BASE_URL}/branches?course=${encodeURIComponent(selectedCourse)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to load branches");
-        return res.json();
-      })
-      .then((data) => {
-        setBranches(data);
-        // We will keep "selectedBranch" optional; initialize it to empty or first value
-        setSelectedBranch("");
-      })
-      .catch((err) => {
-        console.error(err);
-        setBranches([]);
-        setSelectedBranch("");
-      });
-  }, [selectedCourse]);
-
-  // 3) “Find Colleges” button handler
-  const onFindColleges = () => {
-    if (!selectedCourse || !selectedCategory || !rank) {
-      alert("Please select course, category, and enter your rank.");
+    if (!selectedCourse || !selectedCategory) {
+      setBranches([]);
       return;
     }
-    const queryParams = new URLSearchParams({
-      course: selectedCourse,
-      rank,
-      category: selectedCategory,
-    });
-    if (selectedBranch) {
-      queryParams.set("branch", selectedBranch);
+
+    // e.g. GET /branches?course=engineering&category=GM
+    fetch(`/branches?course=${selectedCourse}&category=${selectedCategory}`)
+      .then((resp) => {
+        if (!resp.ok) throw new Error('Failed to load branches');
+        return resp.json();
+      })
+      .then(data => setBranches(data))
+      .catch(err => console.error(err));
+  }, [selectedCourse, selectedCategory]);
+
+  const onSubmit = () => {
+    if (!rank || !selectedCourse || !selectedCategory) {
+      alert('Rank, Course, and Category are required.');
+      return;
     }
-    fetch(`${BASE_URL}/predict?${queryParams.toString()}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to load results");
-        return res.json();
+
+    let url = `/predict?rank=${rank}&category=${selectedCategory}&course=${selectedCourse}`;
+    if (selectedBranch) {
+      url += `&branch=${encodeURIComponent(selectedBranch)}`;
+    }
+
+    fetch(url)
+      .then((resp) => {
+        if (!resp.ok) throw new Error('Failed to fetch results');
+        return resp.json();
       })
-      .then((data) => {
-        setResults(data);
-      })
-      .catch((err) => {
+      .then(data => setResults(data.eligible || []))
+      .catch(err => {
         console.error(err);
-        setResults([]);
+        alert('Error fetching results');
       });
   };
 
-  // 4) “Download as PDF” handler
-  const onDownloadPDF = async () => {
-    if (!window.jspdf || !window.jspdf.jsPDF || !window.html2canvas) {
-      alert("PDF libraries not loaded.");
+  // Download table as PDF using jsPDF + autotable
+  const downloadPDF = () => {
+    if (results.length === 0) {
+      alert('No results to download.');
       return;
     }
-    const { jsPDF } = window.jspdf;
-    const element = tableRef.current;
-    const canvas = await window.html2canvas(element, {
-      scale: 2,
-      useCORS: true,
+
+    const doc = new jsPDF();
+    const tableColumn = ['Code', 'College Name', 'Branch', 'Cutoff Rank'];
+    const tableRows = [];
+
+    results.forEach(item => {
+      tableRows.push([
+        item.Code,
+        item['College Name'],
+        item.Branch,
+        item['Cutoff Rank']
+      ]);
     });
-    const imgData = canvas.toDataURL("image/png");
-    const pdf = new jsPDF({
-      orientation: "landscape",
-      unit: "pt",
-      format: "a4",
+
+    doc.autoTable({
+      head: [tableColumn],
+      body: tableRows,
+      startY: 20,
     });
-    const pdfWidth = pdf.internal.pageSize.getWidth();
-    const pdfHeight =
-      (canvas.height * pdfWidth) / canvas.width;
-    pdf.text(`CET College Predictor Results`, 40, 40);
-    pdf.text(`Course: ${selectedCourse}`, 40, 60);
-    pdf.text(`Category: ${selectedCategory}`, 40, 80);
-    if (selectedBranch) {
-      pdf.text(`Branch: ${selectedBranch}`, 40, 100);
-    }
-    pdf.text(`Rank: ${rank}`, 40, 120);
-    pdf.addImage(
-      imgData,
-      "PNG",
-      20,
-      140,
-      pdfWidth - 40,
-      pdfHeight - 160
-    );
-    pdf.save("cet_college_predictions.pdf");
+
+    doc.save(`eligible_colleges_${selectedCourse}_${selectedCategory}.pdf`);
   };
 
   return (
-    <div style={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
-      <h1>CET College Predictor</h1>
-      <div style={{ marginBottom: "12px" }}>
+    <div style={{ maxWidth: 800, margin: 'auto', padding: 30, fontFamily: 'Arial, sans-serif' }}>
+      <h1>College Predictor</h1>
+
+      <div style={{ marginBottom: 20 }}>
         <label>
           Course:&nbsp;
           <select
             value={selectedCourse}
-            onChange={(e) => setSelectedCourse(e.target.value)}
+            onChange={(e) => { setSelectedCourse(e.target.value); setSelectedCategory(''); setSelectedBranch(''); }}
           >
-            {courses.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
+            <option value="engineering">Engineering</option>
+            <option value="pharma">Pharmacy</option>
+            <option value="bscnurs">BSc Nursing</option>
+            <option value="agri">Agriculture</option>
           </select>
         </label>
       </div>
 
-      <div style={{ marginBottom: "12px" }}>
-        <label>
-          Your CET Rank:&nbsp;
-          <input
-            type="number"
-            value={rank}
-            onChange={(e) => setRank(e.target.value)}
-            style={{ width: "120px" }}
-          />
-        </label>
-      </div>
-
-      <div style={{ marginBottom: "12px" }}>
+      <div style={{ marginBottom: 20 }}>
         <label>
           Category:&nbsp;
           <select
             value={selectedCategory}
-            onChange={(e) => setSelectedCategory(e.target.value)}
+            onChange={(e) => { setSelectedCategory(e.target.value); setSelectedBranch(''); }}
           >
+            <option value="">-- Select Category --</option>
             {categories.map((cat) => (
-              <option key={cat} value={cat}>
-                {cat}
-              </option>
+              <option key={cat} value={cat}>{cat}</option>
             ))}
           </select>
         </label>
       </div>
 
-      <div style={{ marginBottom: "12px" }}>
+      <div style={{ marginBottom: 20 }}>
         <label>
           Branch (optional):&nbsp;
           <select
             value={selectedBranch}
             onChange={(e) => setSelectedBranch(e.target.value)}
+            disabled={branches.length === 0}
           >
             <option value="">-- All Branches --</option>
             {branches.map((br) => (
-              <option key={br} value={br}>
-                {br}
-              </option>
+              <option key={br} value={br}>{br}</option>
             ))}
           </select>
         </label>
       </div>
 
-      <button onClick={onFindColleges}>Find Colleges</button>
-      &nbsp;
-      <button onClick={onDownloadPDF}>Download as PDF</button>
-
-      <hr />
-
-      <div ref={tableRef}>
-        <table
-          style={{
-            width: "100%",
-            borderCollapse: "collapse",
-            marginTop: "20px",
-          }}
-        >
-          <thead>
-            <tr>
-              <th style={{ border: "1px solid #333", padding: "8px" }}>
-                Code
-              </th>
-              <th style={{ border: "1px solid #333", padding: "8px" }}>
-                College Name
-              </th>
-              <th style={{ border: "1px solid #333", padding: "8px" }}>
-                Branch
-              </th>
-              <th style={{ border: "1px solid #333", padding: "8px" }}>
-                Category
-              </th>
-              <th style={{ border: "1px solid #333", padding: "8px" }}>
-                Cutoff Rank
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {results.map((row, idx) => (
-              <tr key={idx}>
-                <td
-                  style={{
-                    border: "1px solid #ccc",
-                    padding: "6px",
-                  }}
-                >
-                  {row.college_code}
-                </td>
-                <td
-                  style={{
-                    border: "1px solid #ccc",
-                    padding: "6px",
-                  }}
-                >
-                  {row.college_name}
-                </td>
-                <td
-                  style={{
-                    border: "1px solid #ccc",
-                    padding: "6px",
-                  }}
-                >
-                  {row.branch_code}
-                </td>
-                <td
-                  style={{
-                    border: "1px solid #ccc",
-                    padding: "6px",
-                  }}
-                >
-                  {row.category}
-                </td>
-                <td
-                  style={{
-                    border: "1px solid #ccc",
-                    padding: "6px",
-                  }}
-                >
-                  {row.cutoff_rank}
-                </td>
-              </tr>
-            ))}
-            {results.length === 0 && (
-              <tr>
-                <td
-                  colSpan={5}
-                  style={{
-                    border: "1px solid #ccc",
-                    padding: "6px",
-                    textAlign: "center",
-                  }}
-                >
-                  No eligible colleges found.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+      <div style={{ marginBottom: 20 }}>
+        <label>
+          CET Rank:&nbsp;
+          <input
+            type="number"
+            value={rank}
+            onChange={(e) => setRank(e.target.value)}
+            placeholder="Enter your CET rank"
+          />
+        </label>
       </div>
+
+      <button onClick={onSubmit} style={{ padding: '8px 16px', cursor: 'pointer' }}>
+        Predict
+      </button>
+
+      {results.length > 0 && (
+        <div style={{ marginTop: 40 }}>
+          <h2>Eligible Colleges</h2>
+          <table border="1" cellPadding="8" cellSpacing="0" width="100%" style={{ borderCollapse: 'collapse' }}>
+            <thead style={{ backgroundColor: '#f0f0f0' }}>
+              <tr>
+                <th>Code</th>
+                <th>College Name</th>
+                <th>Branch</th>
+                <th>Cutoff Rank</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((item, idx) => (
+                <tr key={idx}>
+                  <td>{item.Code}</td>
+                  <td>{item['College Name']}</td>
+                  <td>{item.Branch}</td>
+                  <td>{item['Cutoff Rank']}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <button
+            onClick={downloadPDF}
+            style={{ marginTop: 20, padding: '6px 12px', cursor: 'pointer' }}
+          >
+            Download as PDF
+          </button>
+        </div>
+      )}
     </div>
   );
 }
