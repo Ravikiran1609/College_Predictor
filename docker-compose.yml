@@ -1,41 +1,42 @@
-version: "3.8"
+# =====================================
+# docker-compose.yml
+# =====================================
 
 services:
-  # ----------------------------------------------------
-  # Backend: FastAPI + Uvicorn
-  # ----------------------------------------------------
+
+  # -------------------------------------
+  # 1) Backend Service (FastAPI + Uvicorn)
+  # -------------------------------------
   backend:
     build:
-      context: ./backend
+      context: ./college_predictor_backend
       dockerfile: Dockerfile
     container_name: cet-backend
     restart: unless-stopped
     volumes:
-      - ./backend/cutoffs.db:/app/cutoffs.db:ro
-    # It already exposes 8000 in its Dockerfile
+      - ./college_predictor_backend/cutoffs.db:/app/cutoffs.db:ro
     expose:
       - "8000"
     networks:
       - cet-network
 
-  # ----------------------------------------------------
-  # Frontend: React static build served by Nginx
-  # ----------------------------------------------------
+  # -------------------------------------
+  # 2) Frontend Service (React → Nginx)
+  # -------------------------------------
   frontend:
     build:
-      context: ./frontend
+      context: ./college-predictor-frontend
       dockerfile: Dockerfile
     container_name: cet-frontend
     restart: unless-stopped
-    # No need to expose port to host; we let the proxy access it
     expose:
       - "80"
     networks:
       - cet-network
 
-  # ----------------------------------------------------
-  # Proxy: Nginx (routes "/" → frontend; "/predict" → backend)
-  # ----------------------------------------------------
+  # -------------------------------------
+  # 3) Proxy Service (Nginx → routes traffic)
+  # -------------------------------------
   proxy:
     build:
       context: ./proxy
