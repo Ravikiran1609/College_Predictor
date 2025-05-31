@@ -1,11 +1,13 @@
-# 1) Pin NumPy and pandas to matching, available versions under Python 3.11
+# 1) Pin a NumPy version that is available under Python 3.11
 numpy==1.25.2
+
+# 2) Pin pandas to a version built against NumPy 1.25.x
 pandas==2.1.1
 
-# 2) Then install tabula-py (which will pick up pandas & numpy)
-tabula-py==2.13.0
+# 3) Use a tabula-py release that exists for Python 3.11 (2.10.0)
+tabula-py==2.10.0
 
-# 3) The rest of your FastAPI stack
+# 4) The rest of your FastAPI stack
 fastapi==0.95.1
 uvicorn[standard]==0.23.1
 python-multipart==0.0.6
