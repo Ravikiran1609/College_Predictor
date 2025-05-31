@@ -18,7 +18,7 @@ function App() {
   const tableRef = useRef(null);
 
   useEffect(() => {
-    // Fetch categories
+    // Fetch category list
     fetch("/categories")
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load categories");
@@ -33,7 +33,7 @@ function App() {
         setError("Unable to load category list");
       });
 
-    // Fetch branches
+    // Fetch branch list
     fetch("/branches")
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load branches");
@@ -97,7 +97,7 @@ function App() {
     const canvas = await html2canvas(tableRef.current, { scale: 2 });
     const imgData = canvas.toDataURL("image/png");
 
-    // 2) Create a PDF instance (we imported `jsPDF` above)
+    // 2) Create a PDF instance
     const pdf = new jsPDF("p", "pt", "a4");
     pdf.setFontSize(18);
     pdf.text("Eligible Colleges", 40, 30);
@@ -107,7 +107,7 @@ function App() {
     const imgWidth = pageWidth - 80;
     const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-    // 4) Add image and save
+    // 4) Add the image and save
     pdf.addImage(imgData, "PNG", 40, 50, imgWidth, imgHeight);
     pdf.save("Eligible_Colleges.pdf");
   };
@@ -239,7 +239,7 @@ function App() {
                     </>
                   ) : (
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Eligible Branches (Code + Full Name + Cutoff)
+                      Eligible Branches (Code + Name + Cutoff)
                     </th>
                   )}
                 </tr>

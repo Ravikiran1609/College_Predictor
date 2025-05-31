@@ -8,14 +8,14 @@ import os
 app = FastAPI(title="CET College Predictor (CSV‐only backend)")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURATION:
-#   Ensure that cet_cutoffs_r1_prov.csv is present in this folder
+# CONFIGURATION: 
+#   Ensure that cet_cutoffs_r1_prov.csv is present here (same folder as main.py)
 # ─────────────────────────────────────────────────────────────────────────────
 CSV_PATH = os.path.join(os.path.dirname(__file__), "cet_cutoffs_r1_prov.csv")
 if not os.path.exists(CSV_PATH):
     raise FileNotFoundError(f"Failed to find CSV at {CSV_PATH}")
 
-# Load CSV into a DataFrame at startup.
+# Load the CSV into a DataFrame at startup
 df = pd.read_csv(
     CSV_PATH,
     dtype={
@@ -31,16 +31,18 @@ df = pd.read_csv(
 CATEGORIES = sorted(df["category"].unique().tolist())
 BRANCH_CODES = sorted(df["branch_code"].unique().tolist())
 
-# Pydantic models (if you want stricter validation; not strictly required)
+
 class SingleBranchResult(BaseModel):
     code: str
     college_name: str
     branch: str
     cutoff_rank: int
 
+
 class MultiBranchItem(BaseModel):
     branch: str
     cutoff_rank: int
+
 
 class MultiBranchResult(BaseModel):
     code: str
@@ -71,8 +73,10 @@ async def predict(
     branch: str = Query("", description="Optional branch code (e.g. 'AI'). If omitted, return all eligible branches per college.")
 ):
     """
-    If 'branch' is provided: list colleges with that single branch whose cutoff_rank >= rank.
-    If 'branch' is blank: for each college, list all branches whose cutoff_rank >= rank.
+    If 'branch' is provided: list colleges with that single branch whose cutoff_rank >= rank,
+    sorted by cutoff_rank ascending.
+    If 'branch' is blank: for each college, list all branches whose cutoff_rank >= rank,
+    sorted by cutoff_rank ascending within each college.
     """
     # 1) Validate category
     if category not in CATEGORIES:
@@ -81,22 +85,23 @@ async def predict(
             detail=f"Unknown category '{category}'. Valid categories: {CATEGORIES}"
         )
 
-    # 2) Filter DF by category
+    # 2) Filter DataFrame by category
     df_cat = df[df["category"] == category]
 
     if branch:
-        # Single‐branch mode
+        # ────────── Single‐branch mode ──────────
         if branch not in df_cat["branch_code"].unique():
             raise HTTPException(
                 status_code=400,
                 detail=f"Unknown branch '{branch}' for category '{category}'"
             )
 
-        # *** FILTER HERE: only cutoff_rank >= rank ***
+        # Filter and then sort by cutoff_rank ascending
         df_sb = df_cat[
             (df_cat["branch_code"] == branch) &
             (df_cat["cutoff_rank"] >= rank)
         ]
+        df_sb = df_sb.sort_values(by="cutoff_rank", ascending=True)
 
         out = []
         for _, row in df_sb.iterrows():
@@ -109,8 +114,10 @@ async def predict(
         return out
 
     else:
-        # Multi‐branch mode: get all branches in that college where cutoff_rank >= rank
+        # ────────── Multi‐branch mode ──────────
         df_mb = df_cat[df_cat["cutoff_rank"] >= rank]
+        df_mb = df_mb.sort_values(by="cutoff_rank", ascending=True)
+
         grouped = df_mb.groupby(["college_code", "college_name"])
         out = []
         for (code, name), group in grouped:
