@@ -1,6 +1,7 @@
 // college-predictor-frontend/src/App.js
 
 import React, { useState, useEffect, useRef } from "react";
+import html2canvas from "html2canvas";     // ← Add this line
 import jsPDF from "jspdf";
 import "jspdf-autotable";
 import { BRANCH_MAP } from "./branchMap";
@@ -12,8 +13,8 @@ function App() {
   const [rank, setRank] = useState("");
   const [category, setCategory] = useState("");
   const [branch, setBranch] = useState("");       // "" means “all branches”
-  const [categories, setCategories] = useState([]); 
-  const [branches, setBranches] = useState([]);       // list of codes (["AI","CS",…])
+  const [categories, setCategories] = useState([]);
+  const [branches, setBranches] = useState([]);   // list of codes (["AI","CS",…])
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -51,7 +52,7 @@ function App() {
         // We only want the code (before the first space).
         const codes = data.map((b) => b.split(" ")[0]);
         setBranches(codes);
-        if (codes.length > 0) setBranch("");  // default to “all branches”
+        if (codes.length > 0) setBranch(""); // default to “all branches”
       })
       .catch((err) => {
         console.error(err);
@@ -121,9 +122,9 @@ function App() {
     pdf.text("Eligible Colleges", 40, 30);
 
     // Calculate dimensions
-    const pageWidth  = pdf.internal.pageSize.getWidth();
-    const imgWidth   = pageWidth - 80; // 40pt margin on each side
-    const imgHeight  = (canvas.height * imgWidth) / canvas.width;
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const imgWidth = pageWidth - 80; // 40pt margin on each side
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
     pdf.addImage(imgData, "PNG", 40, 50, imgWidth, imgHeight);
     pdf.save("Eligible_Colleges.pdf");
